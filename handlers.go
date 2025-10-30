@@ -1,15 +1,15 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
+
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type TaskHandler struct {
-	db *sql.DB
+	db *MongoDB
 }
 
 // HandleTasks handles GET (list all) and POST (create) requests
@@ -27,9 +27,8 @@ func (h *TaskHandler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 // HandleTaskByID handles GET (single), PUT (update), and DELETE requests
 func (h *TaskHandler) HandleTaskByID(w http.ResponseWriter, r *http.Request) {
 	// Extract ID from URL path
-	idStr := strings.TrimPrefix(r.URL.Path, "/tasks/")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
+	id := strings.TrimPrefix(r.URL.Path, "/tasks/")
+	if id == "" {
 		http.Error(w, "Invalid task ID", http.StatusBadRequest)
 		return
 	}
@@ -81,9 +80,9 @@ func (h *TaskHandler) createTask(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(task)
 }
 
-func (h *TaskHandler) getTask(w http.ResponseWriter, r *http.Request, id int) {
+func (h *TaskHandler) getTask(w http.ResponseWriter, r *http.Request, id string) {
 	task, err := GetTaskByID(h.db, id)
-	if err == sql.ErrNoRows {
+	if err == mongo.ErrNoDocuments {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -96,7 +95,7 @@ func (h *TaskHandler) getTask(w http.ResponseWriter, r *http.Request, id int) {
 	json.NewEncoder(w).Encode(task)
 }
 
-func (h *TaskHandler) updateTask(w http.ResponseWriter, r *http.Request, id int) {
+func (h *TaskHandler) updateTask(w http.ResponseWriter, r *http.Request, id string) {
 	var task Task
 	err := json.NewDecoder(r.Body).Decode(&task)
 	if err != nil {
@@ -104,18 +103,24 @@ func (h *TaskHandler) updateTask(w http.ResponseWriter, r *http.Request, id int)
 		return
 	}
 
-	task.ID = id
-	err = UpdateTask(h.db, &task)
+	err = UpdateTask(h.db, id, &task)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Fetch the updated task to return
+	updatedTask, err := GetTaskByID(h.db, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(task)
+	json.NewEncoder(w).Encode(updatedTask)
 }
 
-func (h *TaskHandler) deleteTask(w http.ResponseWriter, r *http.Request, id int) {
+func (h *TaskHandler) deleteTask(w http.ResponseWriter, r *http.Request, id string) {
 	err := DeleteTask(h.db, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

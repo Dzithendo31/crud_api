@@ -1,16 +1,36 @@
 # CRUD API - Task Manager for AI Agents
 
-A simple CRUD API built with Go's standard library and SQLite for managing AI agent tasks.
+A simple CRUD API built with Go's standard library and MongoDB for managing AI agent tasks.
+
+## Prerequisites
+
+- Go 1.16 or higher
+- MongoDB running locally on port 27017 (or use a connection string)
 
 ## Setup
 
-1. Install the SQLite driver:
+1. Install the MongoDB driver:
 ```bash
-go get github.com/mattn/go-sqlite3
+go get go.mongodb.org/mongo-driver/mongo
 ```
 
-2. Run the application:
+2. Start MongoDB (if running locally):
 ```bash
+# Using Docker
+docker run -d -p 27017:27017 --name mongodb mongo:latest
+
+# Or if installed locally
+mongod
+```
+
+3. Run the application:
+```bash
+go run .
+```
+
+4. (Optional) Set custom MongoDB URI:
+```bash
+export MONGODB_URI="mongodb://localhost:27017"
 go run .
 ```
 
@@ -76,23 +96,29 @@ Get all tasks:
 curl http://localhost:8080/tasks
 ```
 
-Get a specific task:
+Get a specific task (replace `<task_id>` with actual MongoDB ObjectID):
 ```bash
-curl http://localhost:8080/tasks/1
+curl http://localhost:8080/tasks/<task_id>
 ```
 
-Update a task:
+Update a task (replace `<task_id>` with actual MongoDB ObjectID):
 ```bash
-curl -X PUT http://localhost:8080/tasks/1 \
+curl -X PUT http://localhost:8080/tasks/<task_id> \
   -H "Content-Type: application/json" \
   -d '{"title":"Analyze logs","description":"Parse error logs and generate report","status":"completed"}'
 ```
 
-Delete a task:
+Delete a task (replace `<task_id>` with actual MongoDB ObjectID):
 ```bash
-curl -X DELETE http://localhost:8080/tasks/1
+curl -X DELETE http://localhost:8080/tasks/<task_id>
 ```
 
 ## Database
 
-The application uses SQLite with a file named `tasks.db` that will be created automatically when you run the application.
+The application uses MongoDB with:
+- Database: `crud_api`
+- Collection: `tasks`
+
+## Environment Variables
+
+- `MONGODB_URI`: MongoDB connection string (default: `mongodb://localhost:27017`)

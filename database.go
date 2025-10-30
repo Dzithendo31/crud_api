@@ -1,88 +1,100 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// InitDB initializes the SQLite database and creates the tasks table
-func InitDB(filepath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", filepath)
+type MongoDB struct {
+	client     *mongo.Client
+	collection *mongo.Collection
+}
+
+// InitDB initializes the MongoDB connection
+func InitDB(uri string) (*MongoDB, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
 		return nil, err
 	}
 
-	// Create tasks table
-	createTableSQL := `CREATE TABLE IF NOT EXISTS tasks (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		title TEXT NOT NULL,
-		description TEXT,
-		status TEXT DEFAULT 'pending',
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);`
-
-	_, err = db.Exec(createTableSQL)
+	// Ping the database to verify connection
+	err = client.Ping(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	return db, nil
+	collection := client.Database("crud_api").Collection("tasks")
+
+	return &MongoDB{
+		client:     client,
+		collection: collection,
+	}, nil
+}
+
+// Close closes the MongoDB connection
+func (db *MongoDB) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return db.client.Disconnect(ctx)
 }
 
 // CreateTask inserts a new task into the database
-func CreateTask(db *sql.DB, task *Task) error {
-	query := `INSERT INTO tasks (title, description, status, created_at, updated_at) 
-			  VALUES (?, ?, ?, ?, ?)`
+func CreateTask(db *MongoDB, task *Task) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	now := time.Now()
-	result, err := db.Exec(query, task.Title, task.Description, task.Status, now, now)
-	if err != nil {
-		return err
-	}
+	task.ID = primitive.NewObjectID()
+	task.CreatedAt = time.Now()
+	task.UpdatedAt = time.Now()
 
-	id, err := result.LastInsertId()
-	if err != nil {
-		return err
-	}
-
-	task.ID = int(id)
-	task.CreatedAt = now
-	task.UpdatedAt = now
-	return nil
+	_, err := db.collection.InsertOne(ctx, task)
+	return err
 }
 
 // GetAllTasks retrieves all tasks from the database
-func GetAllTasks(db *sql.DB) ([]Task, error) {
-	query := `SELECT id, title, description, status, created_at, updated_at FROM tasks`
+func GetAllTasks(db *MongoDB) ([]Task, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	rows, err := db.Query(query)
+	cursor, err := db.collection.Find(ctx, bson.M{})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer cursor.Close(ctx)
 
 	var tasks []Task
-	for rows.Next() {
-		var task Task
-		err := rows.Scan(&task.ID, &task.Title, &task.Description, &task.Status, &task.CreatedAt, &task.UpdatedAt)
-		if err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, task)
+	if err = cursor.All(ctx, &tasks); err != nil {
+		return nil, err
+	}
+
+	// Return empty slice instead of nil if no tasks
+	if tasks == nil {
+		tasks = []Task{}
 	}
 
 	return tasks, nil
 }
 
 // GetTaskByID retrieves a single task by ID
-func GetTaskByID(db *sql.DB, id int) (*Task, error) {
-	query := `SELECT id, title, description, status, created_at, updated_at FROM tasks WHERE id = ?`
+func GetTaskByID(db *MongoDB, id string) (*Task, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	objectID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return nil, err
+	}
 
 	var task Task
-	err := db.QueryRow(query, id).Scan(&task.ID, &task.Title, &task.Description, &task.Status, &task.CreatedAt, &task.UpdatedAt)
+	err = db.collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&task)
 	if err != nil {
 		return nil, err
 	}
@@ -91,17 +103,39 @@ func GetTaskByID(db *sql.DB, id int) (*Task, error) {
 }
 
 // UpdateTask updates an existing task
-func UpdateTask(db *sql.DB, task *Task) error {
-	query := `UPDATE tasks SET title = ?, description = ?, status = ?, updated_at = ? WHERE id = ?`
+func UpdateTask(db *MongoDB, id string, task *Task) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	objectID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return err
+	}
 
 	task.UpdatedAt = time.Now()
-	_, err := db.Exec(query, task.Title, task.Description, task.Status, task.UpdatedAt, task.ID)
+	update := bson.M{
+		"$set": bson.M{
+			"title":       task.Title,
+			"description": task.Description,
+			"status":      task.Status,
+			"updated_at":  task.UpdatedAt,
+		},
+	}
+
+	_, err = db.collection.UpdateOne(ctx, bson.M{"_id": objectID}, update)
 	return err
 }
 
 // DeleteTask removes a task from the database
-func DeleteTask(db *sql.DB, id int) error {
-	query := `DELETE FROM tasks WHERE id = ?`
-	_, err := db.Exec(query, id)
+func DeleteTask(db *MongoDB, id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	objectID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.collection.DeleteOne(ctx, bson.M{"_id": objectID})
 	return err
 }
